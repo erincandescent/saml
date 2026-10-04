@@ -106,6 +106,7 @@ type EntityDescriptor struct {
 	ValidUntil                    time.Time     `xml:"validUntil,attr,omitempty"`
 	CacheDuration                 time.Duration `xml:"cacheDuration,attr,omitempty"`
 	Signature                     *etree.Element
+	Extensions                    *Extensions                    `xml:"Extensions,omitempty"`
 	RoleDescriptors               []RoleDescriptor               `xml:"RoleDescriptor"`
 	IDPSSODescriptors             []IDPSSODescriptor             `xml:"IDPSSODescriptor"`
 	SPSSODescriptors              []SPSSODescriptor              `xml:"SPSSODescriptor"`
@@ -198,6 +199,7 @@ type RoleDescriptor struct {
 	ProtocolSupportEnumeration string        `xml:"protocolSupportEnumeration,attr"`
 	ErrorURL                   string        `xml:"errorURL,attr,omitempty"`
 	Signature                  *etree.Element
+	Extensions                 *Extensions     `xml:"Extensions,omitempty"`
 	KeyDescriptors             []KeyDescriptor `xml:"KeyDescriptor,omitempty"`
 	Organization               *Organization   `xml:"Organization,omitempty"`
 	ContactPeople              []ContactPerson `xml:"ContactPerson,omitempty"`
@@ -212,6 +214,36 @@ type KeyDescriptor struct {
 
 // EncryptionMethod represents the XMLSEC object of the same name
 type EncryptionMethod struct {
+	Algorithm string `xml:"Algorithm,attr"`
+	// KeySize is the xenc:KeySize child, present for algorithms that permit
+	// varying key sizes.
+	KeySize *int `xml:"http://www.w3.org/2001/04/xmlenc# KeySize,omitempty"`
+}
+
+// Extensions represents the md:Extensions element.
+//
+// It carries extension elements defined outside the core metadata schema. The
+// signing and digest methods are those of the SAML V2.0 Metadata Profile for
+// Algorithm Support.
+//
+// See https://docs.oasis-open.org/security/saml/Post2.0/sstc-saml-metadata-algsupport-v1.0-cs01.html
+type Extensions struct {
+	SigningMethods []SigningMethod `xml:"urn:oasis:names:tc:SAML:metadata:algsupport SigningMethod"`
+	DigestMethods  []DigestMethod  `xml:"urn:oasis:names:tc:SAML:metadata:algsupport DigestMethod"`
+}
+
+// SigningMethod represents an alg:SigningMethod element: an XML Signature
+// algorithm the entity supports, with optional bounds on the key size it
+// supports for that algorithm.
+type SigningMethod struct {
+	Algorithm  string `xml:"Algorithm,attr"`
+	MinKeySize int    `xml:"MinKeySize,attr,omitempty"`
+	MaxKeySize int    `xml:"MaxKeySize,attr,omitempty"`
+}
+
+// DigestMethod represents an alg:DigestMethod element: an XML Signature digest
+// algorithm the entity supports.
+type DigestMethod struct {
 	Algorithm string `xml:"Algorithm,attr"`
 }
 
