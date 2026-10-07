@@ -1,6 +1,7 @@
 package xmlenc
 
 import (
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"math/rand"
@@ -36,24 +37,36 @@ func TestCanEncryptOAEP(t *testing.T) {
 	})
 
 	t.Run("GCM", func(t *testing.T) {
-		RandReader = rand.New(rand.NewSource(0)) //nolint:gosec // deterministic random numbers for tests
-
-		cert := golden.Get(t, "cert.cert")
-		b, _ := pem.Decode(cert)
-		certificate, err := x509.ParseCertificate(b.Bytes)
+		certBlock, _ := pem.Decode(golden.Get(t, "cert.cert"))
+		certificate, err := x509.ParseCertificate(certBlock.Bytes)
 		assert.Check(t, err)
+
+		keyBlock, _ := pem.Decode(golden.Get(t, "cert.key"))
+		assert.Assert(t, keyBlock != nil)
+		parsed, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+		assert.Check(t, err)
+		rsaKey, ok := parsed.(*rsa.PrivateKey)
+		assert.Assert(t, ok)
 
 		e := OAEP()
 		e.BlockCipher = AES128GCM
 		e.DigestMethod = &SHA1
 
-		el, err := e.Encrypt(certificate, golden.Get(t, "plaintext_gcm.xml"), []byte("1234567890AZ"))
-		assert.Check(t, err)
+		plaintext := golden.Get(t, "plaintext_gcm.xml")
 
-		doc := etree.NewDocument()
-		doc.SetRoot(el)
-		doc.Indent(4)
-		ciphertext, _ := doc.WriteToString()
-		golden.Assert(t, ciphertext, "ciphertext_gcm.xml")
+		// A nil nonce is generated and prefixed to the ciphertext, so the
+		// result must round-trip.
+		el, err := e.Encrypt(certificate, plaintext, nil)
+		assert.Check(t, err)
+		got, err := Decrypt(rsaKey, el)
+		assert.Check(t, err)
+		assert.DeepEqual(t, got, plaintext)
+
+		// An explicit nonce must round-trip too.
+		el, err = e.Encrypt(certificate, plaintext, []byte("1234567890AZ"))
+		assert.Check(t, err)
+		got, err = Decrypt(rsaKey, el)
+		assert.Check(t, err)
+		assert.DeepEqual(t, got, plaintext)
 	})
 }

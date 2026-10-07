@@ -3,7 +3,6 @@ package xmlenc
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -58,23 +57,25 @@ func (e GCM) Encrypt(key interface{}, plaintext []byte, nonce []byte) (*etree.El
 	em.CreateAttr("Algorithm", e.algorithm)
 	em.CreateAttr("xmlns:xenc", "http://www.w3.org/2001/04/xmlenc#")
 
-	plaintext = appendPadding(plaintext, block.BlockSize())
-
 	aesgcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return nil, err
 	}
 
 	if nonce == nil {
-		// generate random nonce when it's nil
-		nonce := make([]byte, aesgcm.NonceSize())
-		if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-			panic(err.Error())
+		nonce = make([]byte, aesgcm.NonceSize())
+		if _, err := io.ReadFull(RandReader, nonce); err != nil {
+			return nil, err
 		}
+	} else if len(nonce) != aesgcm.NonceSize() {
+		return nil, fmt.Errorf("nonce must be %d bytes, got %d", aesgcm.NonceSize(), len(nonce))
 	}
 
-	ciphertext := make([]byte, len(plaintext))
-	text := aesgcm.Seal(nil, nonce, ciphertext, nil)
+	// GCM is an AEAD mode and needs no padding. The nonce is prefixed to the
+	// ciphertext, which is what Decrypt expects.
+	text := make([]byte, 0, len(nonce)+len(plaintext)+aesgcm.Overhead())
+	text = append(text, nonce...)
+	text = aesgcm.Seal(text, nonce, plaintext, nil)
 
 	cd := encryptedDataEl.CreateElement("xenc:CipherData")
 	cd.CreateAttr("xmlns:xenc", "http://www.w3.org/2001/04/xmlenc#")
