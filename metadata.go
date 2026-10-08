@@ -218,6 +218,21 @@ type EncryptionMethod struct {
 	// KeySize is the xenc:KeySize child, present for algorithms that permit
 	// varying key sizes.
 	KeySize *int `xml:"http://www.w3.org/2001/04/xmlenc# KeySize,omitempty"`
+	// Digest is the ds:DigestMethod child: the OAEP digest used with
+	// rsa-oaep-mgf1p or rsa-oaep. Defaults to SHA-1.
+	Digest *DigestMethod `xml:"http://www.w3.org/2000/09/xmldsig# DigestMethod,omitempty"`
+	// MGF is the xenc11:MGF child: the MGF1 digest used with rsa-oaep.
+	// Defaults to MGF1-SHA-1. The rsa-oaep-mgf1p identifier fixes MGF1 to
+	// SHA-1 and forbids this element.
+	MGF *MGF `xml:"http://www.w3.org/2009/xmlenc11# MGF,omitempty"`
+	// OAEPparams is the base64 xenc:OAEPparams child: the OAEP label.
+	OAEPparams string `xml:"http://www.w3.org/2001/04/xmlenc# OAEPparams,omitempty"`
+}
+
+// MGF represents an xenc11:MGF element, selecting the mask generation
+// function used with RSA-OAEP.
+type MGF struct {
+	Algorithm string `xml:"Algorithm,attr"`
 }
 
 // Extensions represents the md:Extensions element.

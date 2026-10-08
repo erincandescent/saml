@@ -1,13 +1,14 @@
 package xmlenc
 
 import (
+	"bytes"
+	"crypto"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
-
 	"strings"
 
 	"github.com/beevik/etree"
@@ -48,21 +49,218 @@ func (e ErrIncorrectKeyType) Error() string {
 	return fmt.Sprintf("expected key to be %s", string(e))
 }
 
-// Decrypt decrypts the encrypted data using the provided key. If the
-// data are encrypted using AES or 3DEC, then the key should be a []byte.
-// If the data are encrypted with PKCS1v15 or RSA-OAEP-MGF1P then key should
-// be a *rsa.PrivateKey.
-func Decrypt(key interface{}, ciphertextEl *etree.Element) ([]byte, error) {
-	encryptionMethodEl := ciphertextEl.FindElement("./EncryptionMethod")
+// ErrParameterMismatch is returned when the parameters declared by a
+// ciphertext do not match the parameters the matching key was configured
+// with.
+var ErrParameterMismatch = errors.New("xmlenc: ciphertext parameters do not match the configured key")
+
+// OAEPParameters describes the RSA-OAEP parameters a key is configured to
+// use. A zero Hash means SHA-1; a zero MGFHash means the effective hash.
+type OAEPParameters struct {
+	Hash    crypto.Hash
+	MGFHash crypto.Hash
+	Label   []byte
+}
+
+// Key describes a key that a Decryptor may use, together with the metadata
+// needed to select it for a given ciphertext.
+type Key struct {
+	// Key is either an *rsa.PrivateKey (to unwrap an EncryptedKey) or a
+	// []byte symmetric key (to decrypt an EncryptedData directly).
+	Key any
+
+	// Certificate identifies Key in the ds:KeyInfo of an EncryptedKey.
+	Certificate *x509.Certificate
+
+	// OAEP holds the RSA-OAEP parameters Key is configured to use.
+	OAEP OAEPParameters
+
+	// Ciphers are the block ciphers that may be used with Key.
+	Ciphers []BlockCipher
+}
+
+// Decryptor decrypts xmlenc elements using a fixed, caller-configured set of
+// keys. The parameters used for decryption are never taken from the
+// ciphertext; the parameters it declares are only checked against the
+// configuration.
+type Decryptor struct {
+	keys []Key
+}
+
+// NewDecryptor returns a Decryptor that will use the given keys.
+func NewDecryptor(keys ...Key) *Decryptor {
+	return &Decryptor{keys: keys}
+}
+
+// Decrypt decrypts an xenc:EncryptedData or xenc:EncryptedKey element.
+func (d *Decryptor) Decrypt(el *etree.Element) ([]byte, error) {
+	switch el.Tag {
+	case "EncryptedData":
+		return d.decryptData(el)
+	case "EncryptedKey":
+		return d.decryptKey(el)
+	default:
+		return nil, ErrIncorrectTag
+	}
+}
+
+func (d *Decryptor) decryptData(el *etree.Element) ([]byte, error) {
+	var (
+		key      Key
+		keyBytes []byte
+		found    bool
+	)
+
+	if encryptedKeyEl := el.FindElement("./KeyInfo/EncryptedKey"); encryptedKeyEl != nil {
+		// The symmetric key is wrapped in an EncryptedKey; select the RSA key
+		// by the certificate it advertises and unwrap it.
+		k, err := d.keyForElement(encryptedKeyEl)
+		if err != nil {
+			return nil, err
+		}
+		keyBytes, err = d.decryptKeyWith(encryptedKeyEl, *k)
+		if err != nil {
+			return nil, err
+		}
+		key = *k
+		found = true
+	} else {
+		// The data is encrypted directly with a configured symmetric key.
+		for i := range d.keys {
+			if _, ok := d.keys[i].Key.([]byte); ok {
+				key = d.keys[i]
+				keyBytes, _ = key.Key.([]byte)
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		return nil, ErrCannotFindRequiredElement("key")
+	}
+
+	encryptionMethodEl := el.FindElement("./EncryptionMethod")
 	if encryptionMethodEl == nil {
 		return nil, ErrCannotFindRequiredElement("EncryptionMethod")
 	}
 	algorithm := encryptionMethodEl.SelectAttrValue("Algorithm", "")
-	decrypter, ok := decrypters[algorithm]
-	if !ok {
-		return nil, ErrAlgorithmNotImplemented(algorithm)
+	for _, cipher := range key.Ciphers {
+		if cipher.Algorithm() == algorithm {
+			return cipher.Decrypt(keyBytes, el)
+		}
 	}
-	return decrypter.Decrypt(key, ciphertextEl)
+	return nil, ErrAlgorithmNotImplemented(algorithm)
+}
+
+func (d *Decryptor) decryptKey(el *etree.Element) ([]byte, error) {
+	key, err := d.keyForElement(el)
+	if err != nil {
+		return nil, err
+	}
+	return d.decryptKeyWith(el, *key)
+}
+
+func (d *Decryptor) decryptKeyWith(el *etree.Element, key Key) ([]byte, error) {
+	if err := validateOAEPParameters(el, key.OAEP); err != nil {
+		return nil, err
+	}
+
+	decrypter := RSA{
+		Hash:    key.OAEP.Hash,
+		MGFHash: key.OAEP.MGFHash,
+		Label:   key.OAEP.Label,
+		keyDecrypter: func(e RSA, privKey *rsa.PrivateKey, ciphertext []byte) ([]byte, error) {
+			return privKey.Decrypt(RandReader, ciphertext, e.oaepOptions())
+		},
+	}
+	return decrypter.Decrypt(key.Key, el)
+}
+
+// keyForElement returns the configured key identified by the certificate
+// carried in the ds:KeyInfo of el.
+func (d *Decryptor) keyForElement(el *etree.Element) (*Key, error) {
+	certEl := el.FindElement("./KeyInfo/X509Data/X509Certificate")
+	if certEl == nil {
+		return nil, ErrCannotFindRequiredElement("KeyInfo/X509Data/X509Certificate")
+	}
+	raw, err := decodeBase64(certEl.Text())
+	if err != nil {
+		return nil, ErrCannotFindRequiredElement("KeyInfo/X509Data/X509Certificate")
+	}
+	for i := range d.keys {
+		if d.keys[i].Certificate != nil && bytes.Equal(d.keys[i].Certificate.Raw, raw) {
+			return &d.keys[i], nil
+		}
+	}
+	return nil, ErrCannotFindRequiredElement("key")
+}
+
+// validateOAEPParameters checks that the RSA-OAEP parameters declared by an
+// EncryptedKey match want. The declared parameters are never used to perform
+// the decryption.
+func validateOAEPParameters(el *etree.Element, want OAEPParameters) error {
+	encryptionMethodEl := el.FindElement("./EncryptionMethod")
+	if encryptionMethodEl == nil {
+		return ErrCannotFindRequiredElement("EncryptionMethod")
+	}
+
+	var declaredMGF crypto.Hash
+	switch algorithm := encryptionMethodEl.SelectAttrValue("Algorithm", ""); algorithm {
+	case RSAOAEPMGF1P:
+		// The 2001 profile fixes MGF1 to SHA-1 and does not allow an MGF
+		// element.
+		if encryptionMethodEl.FindElement("./MGF") != nil {
+			return ErrParameterMismatch
+		}
+		declaredMGF = crypto.SHA1
+	case RSAOAEP:
+		mgfURI := MGF1SHA1
+		if mgfEl := encryptionMethodEl.FindElement("./MGF"); mgfEl != nil {
+			mgfURI = mgfEl.SelectAttrValue("Algorithm", "")
+		}
+		mgfHash, ok := MGFHash(mgfURI)
+		if !ok {
+			return ErrParameterMismatch
+		}
+		declaredMGF = mgfHash
+	default:
+		return ErrAlgorithmNotImplemented(algorithm)
+	}
+
+	digestURI := DigestSHA1
+	if digestMethodEl := encryptionMethodEl.FindElement("./DigestMethod"); digestMethodEl != nil {
+		digestURI = digestMethodEl.SelectAttrValue("Algorithm", "")
+	}
+	declaredDigest, ok := DigestHash(digestURI)
+	if !ok {
+		return ErrParameterMismatch
+	}
+
+	wantHash := defaultHash(want.Hash)
+	wantMGF := want.MGFHash
+	if wantMGF == 0 {
+		wantMGF = wantHash
+	}
+	if declaredDigest != wantHash || declaredMGF != wantMGF {
+		return ErrParameterMismatch
+	}
+
+	var declaredLabel []byte
+	if paramsEl := encryptionMethodEl.FindElement("./OAEPparams"); paramsEl != nil {
+		label, err := decodeBase64(paramsEl.Text())
+		if err != nil {
+			return ErrParameterMismatch
+		}
+		declaredLabel = label
+	}
+	if !bytes.Equal(declaredLabel, want.Label) {
+		return ErrParameterMismatch
+	}
+	return nil
+}
+
+func decodeBase64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(strings.Join(strings.Fields(s), ""))
 }
 
 func getCiphertext(encryptedKey *etree.Element) ([]byte, error) {

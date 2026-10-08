@@ -21,6 +21,10 @@ var Clock *dsig.Clock
 // rand.Reader, but it can be replaced for testing.
 var RandReader = rand.Reader
 
+// The Canonicalizer prefix list MUST be empty. Various implementations
+// (maybe ours?) do not appear to support non-empty prefix lists in XML C14N.
+const canonicalizerPrefixList = ""
+
 //nolint:unparam // This always receives 20, but we want the option to do more or less if needed.
 func randomBytes(n int) []byte {
 	rv := make([]byte, n)

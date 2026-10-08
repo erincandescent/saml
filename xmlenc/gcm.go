@@ -83,19 +83,10 @@ func (e GCM) Encrypt(key interface{}, plaintext []byte, nonce []byte) (*etree.El
 	return encryptedDataEl, nil
 }
 
-// Decrypt decrypts an encrypted element with key. If the ciphertext contains an
-// EncryptedKey element, then the type of `key` is determined by the registered
-// Decryptor for the EncryptedKey element. Otherwise, `key` must be a []byte of
-// length KeySize().
+// Decrypt decrypts an encrypted element with key, which must be a []byte of
+// length KeySize(). Unwrapping an EncryptedKey is the responsibility of the
+// caller (see Decryptor).
 func (e GCM) Decrypt(key interface{}, ciphertextEl *etree.Element) ([]byte, error) {
-	if encryptedKeyEl := ciphertextEl.FindElement("./KeyInfo/EncryptedKey"); encryptedKeyEl != nil {
-		var err error
-		key, err = Decrypt(key, encryptedKeyEl)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	keyBuf, ok := key.([]byte)
 
 	if !ok {
@@ -138,7 +129,3 @@ var (
 		cipher:    aes.NewCipher,
 	}
 )
-
-func init() {
-	RegisterDecrypter(AES128GCM)
-}

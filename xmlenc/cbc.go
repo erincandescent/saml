@@ -77,20 +77,10 @@ func (e CBC) Encrypt(key interface{}, plaintext []byte, _ []byte) (*etree.Elemen
 	return encryptedDataEl, nil
 }
 
-// Decrypt decrypts an encrypted element with key. If the ciphertext contains an
-// EncryptedKey element, then the type of `key` is determined by the registered
-// Decryptor for the EncryptedKey element. Otherwise, `key` must be a []byte of
-// length KeySize().
+// Decrypt decrypts an encrypted element with key, which must be a []byte of
+// length KeySize(). Unwrapping an EncryptedKey is the responsibility of the
+// caller (see Decryptor).
 func (e CBC) Decrypt(key interface{}, ciphertextEl *etree.Element) ([]byte, error) {
-	// If the key is encrypted, decrypt it.
-	if encryptedKeyEl := ciphertextEl.FindElement("./KeyInfo/EncryptedKey"); encryptedKeyEl != nil {
-		var err error
-		key, err = Decrypt(key, encryptedKeyEl)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	keyBuf, ok := key.([]byte)
 	if !ok {
 		return nil, ErrIncorrectKeyType("[]byte")
@@ -157,13 +147,6 @@ var (
 		cipher:    des.NewCipher,
 	}
 )
-
-func init() {
-	RegisterDecrypter(AES128CBC)
-	RegisterDecrypter(AES192CBC)
-	RegisterDecrypter(AES256CBC)
-	RegisterDecrypter(TripleDES)
-}
 
 func appendPadding(buf []byte, blockSize int) []byte {
 	paddingBytes := blockSize - (len(buf) % blockSize)

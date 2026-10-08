@@ -33,6 +33,19 @@ XZS9naRmawEQxOkZQVoMeKgvu05+V4MniFqdQBINIkr5
 	return k
 }()
 
+// testDecryptor is used by Fuzz to exercise the element parsing and
+// parameter validation code paths.
+var testDecryptor = NewDecryptor(Key{
+	Key: testKey,
+	Ciphers: []BlockCipher{
+		AES128CBC,
+		AES192CBC,
+		AES256CBC,
+		TripleDES,
+		AES128GCM,
+	},
+})
+
 // Fuzz is the go-fuzz fuzzing function
 func Fuzz(data []byte) int {
 	doc := etree.NewDocument()
@@ -43,7 +56,7 @@ func Fuzz(data []byte) int {
 		return 0
 	}
 
-	if _, err := Decrypt(testKey, doc.Root()); err != nil {
+	if _, err := testDecryptor.Decrypt(doc.Root()); err != nil {
 		return 0
 	}
 	return 1

@@ -2,9 +2,11 @@ package saml
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"encoding/xml"
 	"html"
 	"net/http"
@@ -23,6 +25,38 @@ import (
 
 	"github.com/crewjam/saml/testsaml"
 )
+
+func mustParseURL(s string) url.URL {
+	rv, err := url.Parse(s)
+	if err != nil {
+		panic(err)
+	}
+	return *rv
+}
+
+func mustParsePrivateKey(pemStr []byte) crypto.Signer {
+	b, _ := pem.Decode(pemStr)
+	if b == nil {
+		panic("cannot parse PEM")
+	}
+	k, err := x509.ParsePKCS1PrivateKey(b.Bytes)
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
+func mustParseCertificate(pemStr []byte) *x509.Certificate {
+	b, _ := pem.Decode(pemStr)
+	if b == nil {
+		panic("cannot parse PEM")
+	}
+	cert, err := x509.ParseCertificate(b.Bytes)
+	if err != nil {
+		panic(err)
+	}
+	return cert
+}
 
 type ServiceProviderTest struct {
 	AuthnRequest []byte

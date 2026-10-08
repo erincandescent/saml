@@ -1127,17 +1127,41 @@ func (sp *ServiceProvider) decryptElement(encryptedEl *etree.Element) (*etree.El
 		return nil, err
 	}
 
-	var key interface{} = sp.Key
-	keyEl := encryptedEl.FindElement("./EncryptedKey")
-	if keyEl != nil {
-		var err error
-		key, err = xmlenc.Decrypt(sp.Key, keyEl)
+	decryptor := xmlenc.NewDecryptor(xmlenc.Key{
+		Key:         sp.Key,
+		Certificate: sp.Certificate,
+		OAEP: xmlenc.OAEPParameters{
+			Hash:    crypto.SHA1,
+			MGFHash: crypto.SHA1,
+		},
+		Ciphers: []xmlenc.BlockCipher{
+			xmlenc.AES128CBC,
+			xmlenc.AES192CBC,
+			xmlenc.AES256CBC,
+			xmlenc.AES128GCM,
+		},
+	})
+
+	if keyEl := encryptedEl.FindElement("./EncryptedKey"); keyEl != nil {
+		// The EncryptedKey is a sibling of the EncryptedData: unwrap it with
+		// the ServiceProvider key, then decrypt the data with the recovered
+		// symmetric key.
+		key, err := decryptor.Decrypt(keyEl)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt key from response: %s", err)
 		}
+		decryptor = xmlenc.NewDecryptor(xmlenc.Key{
+			Key: key,
+			Ciphers: []xmlenc.BlockCipher{
+				xmlenc.AES128CBC,
+				xmlenc.AES192CBC,
+				xmlenc.AES256CBC,
+				xmlenc.AES128GCM,
+			},
+		})
 	}
 
-	plaintextEl, err := xmlenc.Decrypt(key, encryptedDataEl)
+	plaintextEl, err := decryptor.Decrypt(encryptedDataEl)
 	if err != nil {
 		return nil, err
 	}

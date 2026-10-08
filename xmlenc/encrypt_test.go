@@ -1,6 +1,7 @@
 package xmlenc
 
 import (
+	"crypto"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -23,7 +24,8 @@ func TestCanEncryptOAEP(t *testing.T) {
 
 		e := OAEP()
 		e.BlockCipher = AES128CBC
-		e.DigestMethod = &SHA1
+		e.Hash = crypto.SHA1
+		e.MGFHash = crypto.SHA1
 
 		el, err := e.Encrypt(certificate, golden.Get(t, "plaintext.xml"), nil)
 		assert.Check(t, err)
@@ -50,7 +52,15 @@ func TestCanEncryptOAEP(t *testing.T) {
 
 		e := OAEP()
 		e.BlockCipher = AES128GCM
-		e.DigestMethod = &SHA1
+		e.Hash = crypto.SHA1
+		e.MGFHash = crypto.SHA1
+
+		decryptor := NewDecryptor(Key{
+			Key:         rsaKey,
+			Certificate: certificate,
+			OAEP:        OAEPParameters{Hash: crypto.SHA1, MGFHash: crypto.SHA1},
+			Ciphers:     []BlockCipher{AES128GCM},
+		})
 
 		plaintext := golden.Get(t, "plaintext_gcm.xml")
 
@@ -58,14 +68,14 @@ func TestCanEncryptOAEP(t *testing.T) {
 		// result must round-trip.
 		el, err := e.Encrypt(certificate, plaintext, nil)
 		assert.Check(t, err)
-		got, err := Decrypt(rsaKey, el)
+		got, err := decryptor.Decrypt(el)
 		assert.Check(t, err)
 		assert.DeepEqual(t, got, plaintext)
 
 		// An explicit nonce must round-trip too.
 		el, err = e.Encrypt(certificate, plaintext, []byte("1234567890AZ"))
 		assert.Check(t, err)
-		got, err = Decrypt(rsaKey, el)
+		got, err = decryptor.Decrypt(el)
 		assert.Check(t, err)
 		assert.DeepEqual(t, got, plaintext)
 	})
