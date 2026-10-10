@@ -2,6 +2,7 @@ package saml
 
 import (
 	"encoding/xml"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,4 +173,56 @@ func TestMetadataValidatesUrlSchemeForProtocolBinding(t *testing.T) {
 	metadata := EntityDescriptor{}
 	err := xml.Unmarshal(buf, &metadata)
 	assert.Error(t, err, "invalid url scheme \"javascript\" for binding \"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\"")
+}
+
+// TestMetadataKeepsSimpleSignEndpointLocations ensures the HTTP-POST
+// SimpleSign binding is recognised. Unrecognised bindings have their location
+// discarded (see checkEndpointLocation), which would make endpoints
+// advertising it unusable.
+func TestMetadataKeepsSimpleSignEndpointLocations(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata string
+	}{
+		{
+			name: "assertion consumer service",
+			metadata: `<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://sp.example.com/metadata">
+				<SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+					<AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST-SimpleSign" Location="https://sp.example.com/acs" index="0"/>
+				</SPSSODescriptor>
+			</EntityDescriptor>`,
+		},
+		{
+			name: "single sign on service",
+			metadata: `<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.example.com/metadata">
+				<IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+					<SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST-SimpleSign" Location="https://idp.example.com/saml/sso"/>
+				</IDPSSODescriptor>
+			</EntityDescriptor>`,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			metadata := EntityDescriptor{}
+			assert.Check(t, xml.Unmarshal([]byte(test.metadata), &metadata))
+
+			var endpoints []Endpoint
+			for _, sp := range metadata.SPSSODescriptors {
+				for _, acs := range sp.AssertionConsumerServices {
+					endpoints = append(endpoints, Endpoint{Binding: acs.Binding, Location: acs.Location})
+				}
+			}
+			for _, idp := range metadata.IDPSSODescriptors {
+				endpoints = append(endpoints, idp.SingleSignOnServices...)
+			}
+
+			if len(endpoints) != 1 {
+				t.Fatalf("expected exactly one endpoint, got %d", len(endpoints))
+			}
+			assert.Equal(t, HTTPPostSimpleSignBinding, endpoints[0].Binding)
+			assert.Assert(t, strings.HasPrefix(endpoints[0].Location, "https://"), "location was discarded: %q", endpoints[0].Location)
+		})
+	}
 }
